@@ -113,8 +113,10 @@ app.get("/api/me", (req, res) => {
 // LOGOUT
 // --------------------
 app.post("/api/logout", (req, res) => {
-    req.session.destroy();
-    res.json({ ok: true });
+    req.session.destroy(() => {
+        res.clearCookie("connect.sid");
+        res.json({ ok: true });
+    });
 });
 
 // --------------------
