@@ -7,8 +7,15 @@ const db = require("./db");
 
 const app = express();
 
+app.set('trust proxy', 1);
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
+
+app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+});
 
 async function runMigrations() {
     try {
@@ -55,7 +62,12 @@ app.use(
     session({
         secret: process.env.SESSION_SECRET || "dev-reports-secret",
         resave: false,
-        saveUninitialized: false
+        saveUninitialized: false,
+        cookie: {
+            httpOnly: true,
+            secure: false,
+            sameSite: 'lax'
+        }
     })
 );
 
