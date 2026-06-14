@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+    <title>דוחות מפתחים</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+    <div id="loginBox">
+        <div class="login-card">
+            <img src="207GroupLogo-300x90.png" class="login-logo" alt="Group 207" />
+            <h2>דוחות מפתחים</h2>
+            <p class="login-subtitle">התחבר כדי להמשיך</p>
+            <input id="username" placeholder="שם משתמש" autocomplete="username" />
+            <input id="password" type="password" placeholder="סיסמה" autocomplete="current-password" />
+            <button class="btn btn-primary" onclick="login()">כניסה</button>
+            <p id="loginError" class="error-msg"></p>
+        </div>
+    </div>
+
+    <div id="app" style="display:none;">
+
+        <header class="topbar">
+            <img src="207GroupLogo-300x90.png" class="topbar-logo" alt="Group 207" />
+            <div class="topbar-right">
+                <span id="welcomeMsg"></span>
+                <button id="manageUsersBtn" class="btn btn-ghost" onclick="openUsersModal()" style="display:none;">ניהול משתמשים</button>
+                <button class="btn btn-ghost" onclick="logout()">התנתק</button>
+            </div>
+        </header>
+
+        <main>
+
+            <div id="projectsSidebar" class="projects-sidebar">
+                <div class="sidebar-title-row">
+                    <h2>פרויקטים</h2>
+                    <button id="addProjectBtn" class="btn btn-primary btn-sm" onclick="openProjectForm()" style="display:none;">+ הוסף</button>
+                </div>
+                <div id="urgentSidebarSection" style="display:none;">
+                    <div class="sidebar-sep urgent-sep">דורש תשומת לב</div>
+                    <div id="urgentSidebarList"></div>
+                </div>
+                <div class="sidebar-sep">פרויקטים</div>
+                <label class="show-closed-label">
+                    <input type="checkbox" id="showClosedProjects" onchange="loadProjects()" />
+                    הצג סגורים
+                </label>
+                <div id="mainSidebarList"></div>
+            </div>
+
+            <div id="contentCol">
+
+                <div id="createBox" class="section">
+                    <h2>דוח חדש</h2>
+                    <div class="template-field">
+                        <label class="template-label">מה עשיתי היום</label>
+                        <textarea id="field-today" placeholder="פרט את המשימות שסיימת היום..."></textarea>
+                    </div>
+                    <div class="template-field">
+                        <label class="template-label">חסמים</label>
+                        <textarea id="field-blockers" placeholder="האם יש משהו שחוסם אותך? אם לא, כתוב אין."></textarea>
+                    </div>
+                    <div class="template-field">
+                        <label class="template-label">מחר</label>
+                        <textarea id="field-tomorrow" placeholder="מה אתה מתכנן לעשות מחר?"></textarea>
+                    </div>
+                    <div class="template-field">
+                        <label class="template-label">פרויקטים שעבדתי עליהם</label>
+                        <div id="createProjectCheckboxes" class="project-checkboxes"></div>
+                    </div>
+                    <div class="row-actions">
+                        <button class="btn btn-primary" onclick="submitReport('published')">שלח</button>
+                        <button class="btn btn-secondary" onclick="submitReport('draft')">שמור כטיוטה</button>
+                    </div>
+                </div>
+
+                <div id="attendanceBox" class="section" style="display:none;">
+                    <div class="section-header">
+                        <h2>סטטוס הגשה</h2>
+                        <span id="attendanceSummary" class="attendance-summary"></span>
+                    </div>
+                    <div id="attendanceList" class="attendance-grid"></div>
+                </div>
+
+                <div class="section">
+                    <div class="section-header">
+                        <h2>דוחות</h2>
+                        <div class="header-controls">
+                            <input type="text" id="searchInput" placeholder="חיפוש..." class="search-input" />
+                            <input type="date" id="reportDate" />
+                            <button id="exportBtn" class="btn btn-secondary" onclick="exportExcel()" style="display:none;">ייצוא יום לExcel</button>
+                            <button id="weekModeBtn" class="btn btn-secondary" onclick="toggleWeek()">תצוגת שבוע</button>
+                            <button id="toggleViewBtn" class="btn btn-secondary" onclick="toggleView()">תצוגת טבלה</button>
+                        </div>
+                    </div>
+                    <div id="reports"></div>
+                </div>
+
+            </div>
+
+        </main>
+
+    </div>
+
+    <div id="notesModal" class="overlay" style="display:none;">
+        <div class="modal">
+            <h3>הערה</h3>
+            <textarea id="notesContent"></textarea>
+            <div class="modal-actions">
+                <button class="btn btn-primary" onclick="saveNote()">שמור הערה</button>
+                <button class="btn btn-ghost" onclick="closeNotesModal()">ביטול</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="editModal" class="overlay" style="display:none;">
+        <div class="modal">
+            <h3>עריכת דוח</h3>
+            <div id="editModalBody"></div>
+            <div id="editActions" class="modal-actions"></div>
+            <button class="btn btn-ghost" onclick="closeEditModal()">ביטול</button>
+        </div>
+    </div>
+
+
+    <div id="projectFormModal" class="overlay" style="display:none;">
+        <div class="modal">
+            <h3 id="projectFormTitle">פרויקט חדש</h3>
+            <input id="projectName" placeholder="שם הפרויקט" />
+            <textarea id="projectDescription" placeholder="תיאור (אופציונלי)" style="height:80px;"></textarea>
+            <div class="form-row">
+                <div class="form-field">
+                    <label class="template-label">סטטוס</label>
+                    <select id="projectStatus">
+                        <option value="ongoing">פעיל</option>
+                        <option value="future">עתידי</option>
+                        <option value="closed">סגור</option>
+                    </select>
+                </div>
+                <div class="form-field">
+                    <label class="template-label">דחיפות</label>
+                    <select id="projectImmediacy">
+                        <option value="normal">רגילה</option>
+                        <option value="urgent">דחוף</option>
+                        <option value="high">גבוהה</option>
+                        <option value="low">נמוכה</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-primary" onclick="saveProject()">שמור</button>
+                <button class="btn btn-ghost" onclick="closeProjectForm()">ביטול</button>
+            </div>
+            <p id="projectFormError" class="error-msg"></p>
+        </div>
+    </div>
+
+    <div id="usersModal" class="overlay" style="display:none;">
+        <div class="modal modal-wide">
+            <div class="modal-title-row">
+                <h3>ניהול משתמשים</h3>
+                <button class="btn btn-ghost modal-close-btn" onclick="closeUsersModal()">✕</button>
+            </div>
+            <div id="usersTableContainer"></div>
+            <div id="addUserSection">
+                <hr class="modal-divider" />
+                <h4 class="modal-subtitle">הוסף משתמש חדש</h4>
+                <div class="add-user-form">
+                    <input id="newFullName" placeholder="שם מלא" />
+                    <input id="newUsername" placeholder="שם משתמש" />
+                    <input id="newPassword" type="password" placeholder="סיסמה" />
+                    <select id="newRole">
+                        <option value="developer">מפתח</option>
+                        <option value="manager">מנהל</option>
+                        <option value="admin">אדמין</option>
+                    </select>
+                    <button class="btn btn-primary" onclick="addUser()">הוסף</button>
+                </div>
+                <p id="addUserError" class="error-msg"></p>
+            </div>
+        </div>
+    </div>
+
+    <div id="editUserModal" class="overlay" style="display:none;">
+        <div class="modal">
+            <h3>עריכת משתמש</h3>
+            <input id="editUserFullName" placeholder="שם מלא" />
+            <input id="editUserUsername" placeholder="שם משתמש" />
+            <select id="editUserRole">
+                <option value="developer">מפתח</option>
+                <option value="manager">מנהל</option>
+                <option value="admin">אדמין</option>
+            </select>
+            <input id="editUserPassword" type="password" placeholder="סיסמה חדשה (השאר ריק לאי שינוי)" />
+            <div class="modal-actions">
+                <button class="btn btn-primary" onclick="saveUserEdit()">שמור</button>
+                <button class="btn btn-ghost" onclick="closeEditUserModal()">ביטול</button>
+            </div>
+            <p id="editUserError" class="error-msg"></p>
+        </div>
+    </div>
+
+    <div id="toast"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
