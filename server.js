@@ -85,7 +85,7 @@ app.post("/api/login", async (req, res) => {
             .input("username", username)
             .input("password", password)
             .query(`
-                SELECT Username, Role, FullName
+                SELECT Id, Username, Role, FullName
                 FROM Users
                 WHERE Username = @username
                 AND Password = @password
@@ -99,6 +99,7 @@ app.post("/api/login", async (req, res) => {
         }
 
         req.session.user = {
+            id: user.Id,
             username: user.Username,
             role: user.Role,
             fullName: user.FullName
@@ -585,7 +586,7 @@ function requireManagerOrAdmin(req, res, next) {
     next();
 }
 
-app.get("/api/users", requireLogin, requireManagerOrAdmin, async (req, res) => {
+app.get("/api/users", requireLogin, async (req, res) => {
     try {
         const pool = await db.getPool();
         const result = await pool.request().query(`
@@ -809,6 +810,190 @@ app.delete("/api/projects/:id", requireLogin, requireAdmin, async (req, res) => 
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: "Failed to delete project" });
+    }
+});
+
+// --------------------
+// CHAT API
+// --------------------
+
+app.get("/api/conversations", requireLogin, async (req, res) => {
+    const user = req.session.user;
+    try {
+        const pool = await db.getPool();
+        const result = await pool.request()
+            .input("userId", user.id)
+            .query(`
+                SELECT
+                    c.Id,
+                    c.Type,
+                    c.Name,
+                    c.CreatedAt,
+                    lm.Body         AS LastMessage,
+                    lm.SentAt       AS LastMessageAt,
+                    lm.SenderName   AS LastSenderName,
+                    (
+                        SELECT COUNT(*) FROM Messages m2
+                        WHERE m2.ConversationId = c.Id
+                          AND m2.SenderId <> @userId
+                          AND NOT EXISTS (
+                              SELECT 1 FROM MessageReads mr
+                              WHERE mr.MessageId = m2.Id AND mr.UserId = @userId
+                          )
+                    ) AS UnreadCount,
+                    op.FullName AS OtherName,
+                    op.Id       AS OtherUserId
+                FROM Conversations c
+                JOIN ConversationParticipants cp ON cp.ConversationId = c.Id AND cp.UserId = @userId
+                OUTER APPLY (
+                    SELECT TOP 1 m.Body, m.SentAt, u.FullName AS SenderName
+                    FROM Messages m
+                    JOIN Users u ON u.Id = m.SenderId
+                    WHERE m.ConversationId = c.Id
+                    ORDER BY m.SentAt DESC
+                ) lm
+                OUTER APPLY (
+                    SELECT TOP 1 u.FullName, u.Id
+                    FROM ConversationParticipants cp2
+                    JOIN Users u ON u.Id = cp2.UserId
+                    WHERE cp2.ConversationId = c.Id AND cp2.UserId <> @userId
+                ) op
+                ORDER BY COALESCE(lm.SentAt, c.CreatedAt) DESC
+            `);
+        res.json(result.recordset);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to fetch conversations" });
+    }
+});
+
+app.post("/api/conversations", requireLogin, async (req, res) => {
+    const user = req.session.user;
+    const { userId } = req.body;
+    if (!userId || userId === user.id) return res.status(400).json({ error: "Invalid userId" });
+
+    try {
+        const pool = await db.getPool();
+
+        const existing = await pool.request()
+            .input("userId", user.id)
+            .input("otherId", userId)
+            .query(`
+                SELECT c.Id FROM Conversations c
+                WHERE c.Type = 'direct'
+                  AND EXISTS (SELECT 1 FROM ConversationParticipants WHERE ConversationId = c.Id AND UserId = @userId)
+                  AND EXISTS (SELECT 1 FROM ConversationParticipants WHERE ConversationId = c.Id AND UserId = @otherId)
+                  AND (SELECT COUNT(*) FROM ConversationParticipants WHERE ConversationId = c.Id) = 2
+            `);
+
+        if (existing.recordset[0]) {
+            return res.json({ id: existing.recordset[0].Id });
+        }
+
+        const result = await pool.request().query(`
+            INSERT INTO Conversations (Type) OUTPUT INSERTED.Id VALUES ('direct')
+        `);
+        const convId = result.recordset[0].Id;
+
+        await pool.request()
+            .input("convId", convId)
+            .input("u1", user.id)
+            .input("u2", userId)
+            .query(`
+                INSERT INTO ConversationParticipants (ConversationId, UserId) VALUES (@convId, @u1);
+                INSERT INTO ConversationParticipants (ConversationId, UserId) VALUES (@convId, @u2);
+            `);
+
+        res.json({ id: convId });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to create conversation" });
+    }
+});
+
+app.get("/api/conversations/:id/messages", requireLogin, async (req, res) => {
+    const user = req.session.user;
+    const since = req.query.since;
+
+    try {
+        const pool = await db.getPool();
+
+        const access = await pool.request()
+            .input("convId", req.params.id)
+            .input("userId", user.id)
+            .query("SELECT 1 AS ok FROM ConversationParticipants WHERE ConversationId = @convId AND UserId = @userId");
+        if (!access.recordset[0]) return res.status(403).json({ error: "Access denied" });
+
+        const req2 = pool.request().input("convId", req.params.id);
+        let query = `
+            SELECT m.Id, m.Body, m.SentAt, u.FullName AS SenderName, u.Id AS SenderId
+            FROM Messages m
+            JOIN Users u ON u.Id = m.SenderId
+            WHERE m.ConversationId = @convId
+        `;
+        if (since) {
+            req2.input("since", new Date(since));
+            query += " AND m.SentAt > @since";
+        }
+        query += " ORDER BY m.SentAt ASC";
+
+        const result = await req2.query(query);
+        const messages = result.recordset;
+
+        for (const msg of messages) {
+            if (msg.SenderId !== user.id) {
+                await pool.request()
+                    .input("msgId", msg.Id)
+                    .input("userId", user.id)
+                    .query(`
+                        IF NOT EXISTS (SELECT 1 FROM MessageReads WHERE MessageId = @msgId AND UserId = @userId)
+                            INSERT INTO MessageReads (MessageId, UserId) VALUES (@msgId, @userId)
+                    `);
+            }
+        }
+
+        res.json(messages);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to fetch messages" });
+    }
+});
+
+app.post("/api/conversations/:id/messages", requireLogin, async (req, res) => {
+    const user = req.session.user;
+    const content = (req.body.content || "").trim();
+    if (!content) return res.status(400).json({ error: "Message required" });
+
+    try {
+        const pool = await db.getPool();
+
+        const access = await pool.request()
+            .input("convId", req.params.id)
+            .input("userId", user.id)
+            .query("SELECT 1 AS ok FROM ConversationParticipants WHERE ConversationId = @convId AND UserId = @userId");
+        if (!access.recordset[0]) return res.status(403).json({ error: "Access denied" });
+
+        const result = await pool.request()
+            .input("convId", req.params.id)
+            .input("senderId", user.id)
+            .input("body", content)
+            .query(`
+                INSERT INTO Messages (ConversationId, SenderId, Body)
+                OUTPUT INSERTED.Id, INSERTED.Body, INSERTED.SentAt, INSERTED.ConversationId, INSERTED.SenderId
+                VALUES (@convId, @senderId, @body)
+            `);
+
+        const msg = result.recordset[0];
+
+        await pool.request()
+            .input("msgId", msg.Id)
+            .input("userId", user.id)
+            .query("INSERT INTO MessageReads (MessageId, UserId) VALUES (@msgId, @userId)");
+
+        res.json({ ...msg, SenderName: user.fullName });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to send message" });
     }
 });
 

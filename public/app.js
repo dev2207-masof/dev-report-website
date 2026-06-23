@@ -111,6 +111,10 @@ async function checkLogin() {
             document.getElementById("manageUsersBtn").style.display = "inline-flex";
         }
 
+        document.getElementById("chatBtn").style.display = "inline-flex";
+        startBadgePolling();
+        loadConversations(false).then(() => initChatPanel());
+
         const today = new Date().toISOString().split("T")[0];
         const dateInput = document.getElementById("reportDate");
         dateInput.value = today;
@@ -969,6 +973,422 @@ async function addUser() {
     document.getElementById("newPassword").value = "";
     showToast("המשתמש נוסף.");
     loadUsers();
+}
+
+// --------------------
+// CHAT
+// --------------------
+
+let currentConvId   = null;
+let lastMsgTime     = null;
+let chatMsgIds      = new Set();
+let allConversations = [];
+let isLoadingMsgs   = false;
+let chatMsgInterval = null;
+let chatConvInterval = null;
+let badgeInterval   = null;
+
+function escHtml(str) {
+    return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
+function truncate(str, n) {
+    return str.length > n ? str.slice(0, n) + "…" : str;
+}
+
+function openChat() {
+    document.getElementById("chatModal").style.display = "flex";
+    loadConversations(true);
+    startChatPolling();
+}
+
+function closeChat() {
+    document.getElementById("chatModal").style.display = "none";
+    stopChatPolling();
+}
+
+function startChatPolling() {
+    stopChatPolling();
+    chatMsgInterval  = setInterval(pollChatMessages, 3000);
+    chatConvInterval = setInterval(() => loadConversations(true), 10000);
+}
+
+function stopChatPolling() {
+    clearInterval(chatMsgInterval);  chatMsgInterval  = null;
+    clearInterval(chatConvInterval); chatConvInterval = null;
+}
+
+function startBadgePolling() {
+    clearInterval(badgeInterval);
+    badgeInterval = setInterval(() => loadConversations(
+        document.getElementById("chatModal").style.display !== "none"
+    ), 30000);
+}
+
+async function loadConversations(render) {
+    const res = await fetch("/api/conversations");
+    if (!res.ok) return;
+    allConversations = await res.json();
+    if (render) renderConversations(allConversations);
+    updateChatBadge(allConversations.reduce((s, c) => s + c.UnreadCount, 0));
+    updatePanelBadge();
+}
+
+function renderConversations(convs) {
+    const list = document.getElementById("convList");
+    if (!list) return;
+    if (!convs.length) {
+        list.innerHTML = '<p class="empty-state" style="font-size:12px;padding:16px 12px;">אין שיחות</p>';
+        return;
+    }
+    list.innerHTML = convs.map(c => {
+        const name    = c.Type === "group" ? c.Name : c.OtherName;
+        const lastMsg = c.LastMessage ? truncate(c.LastMessage, 32) : "";
+        const badge   = c.UnreadCount > 0
+            ? `<span class="conv-unread">${c.UnreadCount}</span>` : "";
+        return `
+            <div class="conv-item ${c.Id === currentConvId ? "active" : ""}"
+                 onclick="selectConversation(${c.Id})">
+                <div class="conv-item-name">
+                    <span>${escHtml(name || "")}</span>
+                    ${badge}
+                </div>
+                ${lastMsg ? `<div class="conv-last-msg">${escHtml(lastMsg)}</div>` : ""}
+            </div>`;
+    }).join("");
+}
+
+async function selectConversation(id) {
+    currentConvId = id;
+    lastMsgTime   = null;
+    chatMsgIds    = new Set();
+
+    const conv = allConversations.find(c => c.Id === id);
+    const name = conv ? (conv.Type === "group" ? conv.Name : conv.OtherName) : "";
+    document.getElementById("chatThreadHeader").textContent = name || "";
+    document.getElementById("chatInputArea").style.display = "flex";
+    document.getElementById("chatMessages").innerHTML = "";
+
+    renderConversations(allConversations);
+    await loadMessages(id);
+}
+
+async function loadMessages(id) {
+    if (isLoadingMsgs) return;
+    isLoadingMsgs = true;
+    try {
+        const url = lastMsgTime
+            ? `/api/conversations/${id}/messages?since=${encodeURIComponent(lastMsgTime)}`
+            : `/api/conversations/${id}/messages`;
+
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const msgs = await res.json();
+        if (!msgs.length) return;
+
+        const container  = document.getElementById("chatMessages");
+        const wasAtBottom = container.scrollHeight - container.clientHeight - container.scrollTop < 60;
+
+        msgs.filter(m => !chatMsgIds.has(m.Id)).forEach(m => {
+            chatMsgIds.add(m.Id);
+            container.appendChild(buildMsgEl(m));
+        });
+
+        lastMsgTime = msgs[msgs.length - 1].SentAt;
+
+        if (wasAtBottom || !lastMsgTime) {
+            container.scrollTop = container.scrollHeight;
+        }
+
+        updateChatBadge(allConversations.reduce((s, c) => {
+            return s + (c.Id === id ? 0 : c.UnreadCount);
+        }, 0));
+
+        const conv = allConversations.find(c => c.Id === id);
+        if (conv) conv.UnreadCount = 0;
+        renderConversations(allConversations);
+    } finally {
+        isLoadingMsgs = false;
+    }
+}
+
+function buildMsgEl(msg) {
+    const isOwn = msg.SenderId === currentUser.id;
+    const div = document.createElement("div");
+    div.className = `chat-msg ${isOwn ? "own" : "other"}`;
+    const body = escHtml(msg.Body).replace(/\n/g, "<br>");
+    const time = formatMsgTime(msg.SentAt);
+    div.innerHTML = `
+        ${!isOwn ? `<span class="chat-msg-sender">${escHtml(msg.SenderName)}</span>` : ""}
+        <div class="chat-bubble ${isOwn ? "bubble-own" : "bubble-other"}">${body}</div>
+        <span class="chat-msg-time">${time}</span>`;
+    return div;
+}
+
+function formatMsgTime(sentAt) {
+    const d   = new Date(sentAt);
+    const now = new Date();
+    const hh  = d.getHours().toString().padStart(2, "0");
+    const mm  = d.getMinutes().toString().padStart(2, "0");
+    if (now.toDateString() === d.toDateString()) return `${hh}:${mm}`;
+    const day = d.getDate().toString().padStart(2, "0");
+    const mon = (d.getMonth() + 1).toString().padStart(2, "0");
+    return `${day}/${mon} ${hh}:${mm}`;
+}
+
+async function pollChatMessages() {
+    if (!currentConvId) return;
+    await loadMessages(currentConvId);
+}
+
+async function sendChatMessage() {
+    const input   = document.getElementById("chatInput");
+    const content = input.value.trim();
+    if (!content || !currentConvId) return;
+
+    const res = await fetch(`/api/conversations/${currentConvId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content })
+    });
+    if (!res.ok) return;
+
+    const msg = await res.json();
+    input.value = "";
+
+    chatMsgIds.add(msg.Id);
+    const container = document.getElementById("chatMessages");
+    container.appendChild(buildMsgEl(msg));
+    container.scrollTop = container.scrollHeight;
+    lastMsgTime = msg.SentAt;
+}
+
+function handleChatKey(e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+    }
+}
+
+function updateChatBadge(count) {
+    const badge = document.getElementById("chatBadge");
+    if (!badge) return;
+    if (count > 0) {
+        badge.textContent = count > 99 ? "99+" : count;
+        badge.style.display = "flex";
+    } else {
+        badge.style.display = "none";
+    }
+}
+
+async function showNewDM() {
+    const res = await fetch("/api/users");
+    if (!res.ok) return;
+    const users = await res.json();
+    const others = users.filter(u => u.Username !== currentUser.username && u.IsActive);
+
+    const list = document.getElementById("newDMUserList");
+    list.innerHTML = others.length
+        ? others.map(u => `
+            <div class="dm-user-item" onclick="startDM(${u.Id})">
+                <span class="dm-user-name">${escHtml(u.FullName)}</span>
+                <span class="dm-user-role">${ROLE_LABELS[u.Role] || u.Role}</span>
+            </div>`).join("")
+        : '<p class="empty-state">אין משתמשים אחרים</p>';
+
+    document.getElementById("newDMModal").style.display = "flex";
+}
+
+function closeNewDM() {
+    document.getElementById("newDMModal").style.display = "none";
+}
+
+async function startDM(userId) {
+    const res = await fetch("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId })
+    });
+    if (!res.ok) return;
+    const { id } = await res.json();
+    closeNewDM();
+    await loadConversations(true);
+    await selectConversation(id);
+}
+
+// --------------------
+// CHAT PANEL
+// --------------------
+
+let panelConvId      = null;
+let panelLastMsgTime = null;
+let panelMsgIds      = new Set();
+let panelExpanded    = false;
+let panelPickerOpen  = false;
+let panelIsLoading   = false;
+let panelMsgInterval = null;
+
+function initChatPanel() {
+    const target = allConversations.find(c => c.UnreadCount > 0)
+                || allConversations.find(c => c.Type === "group")
+                || allConversations[0];
+    if (target) {
+        panelConvId = target.Id;
+        const name  = target.Type === "group" ? target.Name : target.OtherName;
+        document.getElementById("panelConvName").textContent = name || "";
+    }
+    document.getElementById("panelBody").style.display = "none";
+    document.getElementById("panelCollapseBtn").textContent = "▲";
+    document.getElementById("chatPanel").style.display = "flex";
+    updatePanelBadge();
+    startPanelPolling();
+}
+
+function toggleChatPanel() {
+    panelExpanded = !panelExpanded;
+    document.getElementById("panelBody").style.display = panelExpanded ? "flex" : "none";
+    document.getElementById("panelCollapseBtn").textContent = panelExpanded ? "▼" : "▲";
+    if (panelExpanded && panelConvId) loadPanelMessages(panelConvId, true);
+}
+
+function togglePanelPicker() {
+    panelPickerOpen = !panelPickerOpen;
+    const picker = document.getElementById("panelPicker");
+    if (panelPickerOpen) {
+        picker.innerHTML = allConversations.map(c => {
+            const name  = c.Type === "group" ? c.Name : c.OtherName;
+            const badge = c.UnreadCount > 0
+                ? `<span class="conv-unread">${c.UnreadCount}</span>` : "";
+            return `<div class="panel-picker-item ${c.Id === panelConvId ? "active" : ""}"
+                         onclick="selectPanelConv(${c.Id})">
+                        <span>${escHtml(name || "")}</span>${badge}
+                    </div>`;
+        }).join("");
+        picker.style.display = "block";
+    } else {
+        picker.style.display = "none";
+    }
+}
+
+async function selectPanelConv(id) {
+    panelConvId      = id;
+    panelLastMsgTime = null;
+    panelMsgIds      = new Set();
+    panelPickerOpen  = false;
+    document.getElementById("panelPicker").style.display = "none";
+    document.getElementById("panelMessages").innerHTML = "";
+
+    const conv = allConversations.find(c => c.Id === id);
+    document.getElementById("panelConvName").textContent =
+        conv ? (conv.Type === "group" ? conv.Name : conv.OtherName) : "";
+
+    if (panelExpanded) await loadPanelMessages(id, true);
+}
+
+async function loadPanelMessages(id, scrollToBottom) {
+    if (panelIsLoading) return;
+    panelIsLoading = true;
+    try {
+        const url = panelLastMsgTime
+            ? `/api/conversations/${id}/messages?since=${encodeURIComponent(panelLastMsgTime)}`
+            : `/api/conversations/${id}/messages`;
+
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const msgs = await res.json();
+        if (!msgs.length) return;
+
+        const container   = document.getElementById("panelMessages");
+        const wasAtBottom = container.scrollHeight - container.clientHeight - container.scrollTop < 60;
+
+        msgs.filter(m => !panelMsgIds.has(m.Id)).forEach(m => {
+            panelMsgIds.add(m.Id);
+            container.appendChild(buildPanelMsgEl(m));
+        });
+
+        panelLastMsgTime = msgs[msgs.length - 1].SentAt;
+        if (scrollToBottom || wasAtBottom) container.scrollTop = container.scrollHeight;
+
+        const conv = allConversations.find(c => c.Id === id);
+        if (conv) conv.UnreadCount = 0;
+        updatePanelBadge();
+    } finally {
+        panelIsLoading = false;
+    }
+}
+
+function buildPanelMsgEl(msg) {
+    const isOwn = msg.SenderId === currentUser.id;
+    const div   = document.createElement("div");
+    div.className = `chat-msg ${isOwn ? "own" : "other"}`;
+    const body  = escHtml(msg.Body).replace(/\n/g, "<br>");
+    const time  = formatMsgTime(msg.SentAt);
+    div.innerHTML = `
+        ${!isOwn ? `<span class="chat-msg-sender">${escHtml(msg.SenderName)}</span>` : ""}
+        <div class="chat-bubble ${isOwn ? "bubble-own" : "bubble-other"}">${body}</div>
+        <span class="chat-msg-time">${time}</span>`;
+    return div;
+}
+
+async function sendPanelMessage() {
+    const input   = document.getElementById("panelInput");
+    const content = input.value.trim();
+    if (!content || !panelConvId) return;
+
+    const res = await fetch(`/api/conversations/${panelConvId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content })
+    });
+    if (!res.ok) return;
+
+    const msg = await res.json();
+    input.value = "";
+    panelMsgIds.add(msg.Id);
+    const container = document.getElementById("panelMessages");
+    container.appendChild(buildPanelMsgEl(msg));
+    container.scrollTop = container.scrollHeight;
+    panelLastMsgTime = msg.SentAt;
+}
+
+function handlePanelKey(e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendPanelMessage();
+    }
+}
+
+function updatePanelBadge() {
+    // When collapsed, count ALL unread (user can't see any messages)
+    // When expanded, exclude the currently open conversation
+    const total = allConversations
+        .filter(c => panelExpanded ? c.Id !== panelConvId : true)
+        .reduce((s, c) => s + c.UnreadCount, 0);
+    const badge = document.getElementById("panelUnreadBadge");
+    if (!badge) return;
+    if (total > 0) {
+        badge.textContent = total > 99 ? "99+" : total;
+        badge.style.display = "inline-flex";
+    } else {
+        badge.style.display = "none";
+    }
+}
+
+function startPanelPolling() {
+    clearInterval(panelMsgInterval);
+    panelMsgInterval = setInterval(async () => {
+        if (!panelConvId) return;
+        if (panelExpanded) {
+            await loadPanelMessages(panelConvId);
+        } else {
+            // When collapsed, just refresh conversation list to keep badge current
+            await loadConversations(false);
+        }
+    }, 5000);
 }
 
 document.getElementById("username").addEventListener("keydown", e => { if (e.key === "Enter") login(); });

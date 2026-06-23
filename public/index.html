@@ -24,6 +24,10 @@
             <img src="207GroupLogo-300x90.png" class="topbar-logo" alt="Group 207" />
             <div class="topbar-right">
                 <span id="welcomeMsg"></span>
+                <button id="chatBtn" class="btn btn-ghost" onclick="openChat()" style="display:none;position:relative;">
+                    צ׳אט
+                    <span id="chatBadge" class="chat-badge" style="display:none;"></span>
+                </button>
                 <button id="manageUsersBtn" class="btn btn-ghost" onclick="openUsersModal()" style="display:none;">ניהול משתמשים</button>
                 <button class="btn btn-ghost" onclick="logout()">התנתק</button>
             </div>
@@ -197,6 +201,63 @@
                 <button class="btn btn-ghost" onclick="closeEditUserModal()">ביטול</button>
             </div>
             <p id="editUserError" class="error-msg"></p>
+        </div>
+    </div>
+
+    <div id="chatModal" class="overlay" style="display:none;">
+        <div class="modal chat-modal">
+            <div class="chat-header">
+                <h3>צ׳אט</h3>
+                <button class="btn btn-ghost modal-close-btn" onclick="closeChat()">✕</button>
+            </div>
+            <div class="chat-body">
+                <div class="chat-conv-panel">
+                    <div id="convList" class="conv-list"></div>
+                    <button class="btn btn-secondary btn-sm chat-new-dm-btn" onclick="showNewDM()">+ שיחה חדשה</button>
+                </div>
+                <div class="chat-thread-panel">
+                    <div id="chatThreadHeader" class="chat-thread-header"></div>
+                    <div id="chatMessages" class="chat-messages">
+                        <p class="empty-state" style="padding-top:60px;">בחר שיחה כדי להתחיל</p>
+                    </div>
+                    <div id="chatInputArea" class="chat-input-area" style="display:none;">
+                        <textarea id="chatInput" placeholder="כתוב הודעה..." rows="2" onkeydown="handleChatKey(event)"></textarea>
+                        <button class="btn btn-primary" onclick="sendChatMessage()">שלח</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="newDMModal" class="overlay" style="display:none;">
+        <div class="modal" style="width:340px;gap:12px;">
+            <div class="modal-title-row">
+                <h3>שיחה חדשה</h3>
+                <button class="btn btn-ghost modal-close-btn" onclick="closeNewDM()">✕</button>
+            </div>
+            <div id="newDMUserList"></div>
+        </div>
+    </div>
+
+    <div id="chatPanel" class="chat-panel" style="display:none;">
+        <div class="chat-panel-header" onclick="toggleChatPanel()">
+            <div class="chat-panel-title">
+                <span id="panelConvName"></span>
+                <span id="panelUnreadBadge" class="conv-unread" style="display:none;"></span>
+            </div>
+            <div class="chat-panel-controls" onclick="event.stopPropagation()">
+                <button class="btn btn-ghost btn-sm" onclick="togglePanelPicker()" title="החלף שיחה">◀</button>
+                <button class="btn btn-ghost btn-sm" onclick="openChat()" title="פתח בחלון מלא">⤢</button>
+                <button class="btn btn-ghost btn-sm" id="panelCollapseBtn" onclick="toggleChatPanel()">▼</button>
+            </div>
+        </div>
+        <div id="panelBody" class="chat-panel-body">
+            <div id="panelPicker" class="panel-picker" style="display:none;"></div>
+            <div id="panelMessages" class="chat-panel-messages"></div>
+            <div class="chat-panel-input-area">
+                <textarea id="panelInput" placeholder="כתוב הודעה..." onkeydown="handlePanelKey(event)"></textarea>
+                <button class="btn btn-primary btn-sm" onclick="sendPanelMessage()">שלח</button>
+            </div>
         </div>
     </div>
 
